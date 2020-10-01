@@ -85,7 +85,7 @@ public class MysqlOptions extends OptionHolder {
             new ConfigOption<>(
                     "jdbc.reconnect_interval",
                     "The interval(seconds) between reconnections when the " +
-                    "database connection fails.",
+                            "database connection fails.",
                     rangeInt(1, 10),
                     3
             );
@@ -100,9 +100,25 @@ public class MysqlOptions extends OptionHolder {
 
     public static final ConfigOption<String> STORAGE_ENGINE =
             new ConfigOption<>(
-                   "jdbc.storage_engine",
-                   "The storage engine of backend store database, like InnoDB/MyISAM/RocksDB for MySQL.",
+                    "jdbc.storage_engine",
+                    "The storage engine of backend store database, like InnoDB/MyISAM/RocksDB for MySQL.",
                     disallowEmpty(),
                     "InnoDB"
+            );
+
+    public static final ConfigOption<String> JDBC_TEST_SQL =
+            new ConfigOption<>(
+                    "jdbc.test_sql",
+                    "The SQL for test connection.",
+                    null,
+                    "SELECT 1 from dual;"
+            );
+
+    public static final ConfigOption<Integer> JDBC_MAX_ACTIVE =
+            new ConfigOption<>(
+                    "jdbc.max_active",
+                    "Maximum active connections.",
+                    null,
+                    8
             );
 }

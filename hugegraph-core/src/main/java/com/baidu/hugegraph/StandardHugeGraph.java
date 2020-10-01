@@ -93,11 +93,11 @@ import com.google.common.util.concurrent.RateLimiter;
 public class StandardHugeGraph implements HugeGraph {
 
     public static final Class<?>[] PROTECT_CLASSES = {
-           StandardHugeGraph.class,
-           StandardHugeGraph.StandardHugeGraphParams.class,
-           StandardHugeGraph.TinkerpopTransaction.class,
-           StandardHugeGraph.Txs.class,
-           StandardHugeGraph.SysTransaction.class
+            StandardHugeGraph.class,
+            StandardHugeGraph.StandardHugeGraphParams.class,
+            StandardHugeGraph.TinkerpopTransaction.class,
+            StandardHugeGraph.Txs.class,
+            StandardHugeGraph.SysTransaction.class
     };
 
     private static final Logger LOG = Log.logger(HugeGraph.class);
@@ -139,10 +139,10 @@ public class StandardHugeGraph implements HugeGraph {
 
         final int writeLimit = config.get(CoreOptions.RATE_LIMIT_WRITE);
         this.writeRateLimiter = writeLimit > 0 ?
-                                RateLimiter.create(writeLimit) : null;
+                RateLimiter.create(writeLimit) : null;
         final int readLimit = config.get(CoreOptions.RATE_LIMIT_READ);
         this.readRateLimiter = readLimit > 0 ?
-                               RateLimiter.create(readLimit) : null;
+                RateLimiter.create(readLimit) : null;
 
         boolean ramtableEnable = config.get(CoreOptions.QUERY_RAMTABLE_ENABLE);
         if (ramtableEnable) {
@@ -304,7 +304,7 @@ public class StandardHugeGraph implements HugeGraph {
             this.storeProvider.truncate();
             this.storeProvider.initSystemInfo(this);
             this.serverStarted(this.serverInfoManager().selfServerId(),
-                               this.serverInfoManager().selfServerRole());
+                    this.serverInfoManager().selfServerRole());
         } finally {
             LockUtil.unlock(this.name, LockUtil.GRAPH_LOCK);
         }
@@ -412,7 +412,7 @@ public class StandardHugeGraph implements HugeGraph {
         String name = this.configuration.get(CoreOptions.TEXT_ANALYZER);
         String mode = this.configuration.get(CoreOptions.TEXT_ANALYZER_MODE);
         LOG.debug("Loading text analyzer '{}' with mode '{}' for graph '{}'",
-                  name, mode, this.name);
+                name, mode, this.name);
         return AnalyzerFactory.analyzer(name, mode);
     }
 
@@ -431,7 +431,7 @@ public class StandardHugeGraph implements HugeGraph {
 
     @Override
     public <C extends GraphComputer> C compute(Class<C> clazz)
-                                               throws IllegalArgumentException {
+            throws IllegalArgumentException {
         throw Graph.Exceptions.graphComputerNotSupported();
     }
 
@@ -440,11 +440,11 @@ public class StandardHugeGraph implements HugeGraph {
         throw Graph.Exceptions.graphComputerNotSupported();
     }
 
-    @SuppressWarnings({ "unchecked", "rawtypes" })
+    @SuppressWarnings({"unchecked", "rawtypes"})
     @Override
     public <I extends Io> I io(final Io.Builder<I> builder) {
         return (I) builder.graph(this).onMapper(mapper ->
-            mapper.addRegistry(HugeGraphIoRegistry.instance())
+                mapper.addRegistry(HugeGraphIoRegistry.instance())
         ).create();
     }
 
@@ -785,8 +785,8 @@ public class StandardHugeGraph implements HugeGraph {
         }
         // Make sure that all transactions are closed in all threads
         E.checkState(this.tx.closed(),
-                     "Ensure tx closed in all threads when closing graph '%s'",
-                     this.name);
+                "Ensure tx closed in all threads when closing graph '%s'",
+                this.name);
     }
 
     @Override
@@ -823,15 +823,15 @@ public class StandardHugeGraph implements HugeGraph {
     public TaskScheduler taskScheduler() {
         TaskScheduler scheduler = this.taskManager.getScheduler(this.params);
         E.checkState(scheduler != null,
-                     "Can't find task scheduler for graph '%s'", this);
+                "Can't find task scheduler for graph '%s'", this);
         return scheduler;
     }
 
     private ServerInfoManager serverInfoManager() {
         ServerInfoManager manager = this.taskManager
-                                        .getServerInfoManager(this.params);
+                .getServerInfoManager(this.params);
         E.checkState(manager != null,
-                     "Can't find server info manager for graph '%s'", this);
+                "Can't find server info manager for graph '%s'", this);
         return manager;
     }
 
@@ -1115,7 +1115,7 @@ public class StandardHugeGraph implements HugeGraph {
         @Override
         public String toString() {
             return String.format("TinkerpopTransaction{opened=%s, txs=%s}",
-                                 this.opened.get(), this.transactions.get());
+                    this.opened.get(), this.transactions.get());
         }
 
         public long openedTime() {
@@ -1173,7 +1173,7 @@ public class StandardHugeGraph implements HugeGraph {
             if (txs == null) {
                 // TODO: close SchemaTransaction if GraphTransaction is error
                 txs = new Txs(openSchemaTransaction(), openSystemTransaction(),
-                              openGraphTransaction());
+                        openGraphTransaction());
                 this.transactions.set(txs);
             }
             return txs;
@@ -1182,7 +1182,7 @@ public class StandardHugeGraph implements HugeGraph {
         private void destroyTransaction() {
             if (this.isOpen()) {
                 throw new HugeException(
-                          "Transaction should be closed before destroying");
+                        "Transaction should be closed before destroying");
             }
 
             // Do close if needed, then remove the reference
@@ -1194,8 +1194,7 @@ public class StandardHugeGraph implements HugeGraph {
         }
     }
 
-    private static final class Txs {
-
+    private final class Txs {
         private final SchemaTransaction schemaTx;
         private final SysTransaction systemTx;
         private final GraphTransaction graphTx;
@@ -1208,14 +1207,30 @@ public class StandardHugeGraph implements HugeGraph {
             this.systemTx = systemTx;
             this.graphTx = graphTx;
             this.openedTime = DateUtil.now().getTime();
+            // Prepare connection from pool
+            storeProvider.prepareConnection(configuration);
         }
 
         public void commit() {
-            this.graphTx.commit();
+            boolean success = false;
+            try {
+                this.graphTx.commit();
+                success = true;
+            } finally {
+                if (success) {
+                    // Return connection to pool if success transaction, otherwise connection be reused for rollback
+                    storeProvider.releaseConnection();
+                }
+            }
         }
 
         public void rollback() {
-            this.graphTx.rollback();
+            try {
+                this.graphTx.rollback();
+            } finally {
+                // Return connection to pool for failed transaction after rollback
+                storeProvider.releaseConnection();
+            }
         }
 
         public void close() {
@@ -1249,7 +1264,7 @@ public class StandardHugeGraph implements HugeGraph {
         @Override
         public String toString() {
             return String.format("{schemaTx=%s,systemTx=%s,graphTx=%s}",
-                                 this.schemaTx, this.systemTx, this.graphTx);
+                    this.schemaTx, this.systemTx, this.graphTx);
         }
     }
 

@@ -20,6 +20,7 @@
 package com.baidu.hugegraph.backend.store;
 
 import com.baidu.hugegraph.HugeGraph;
+import com.baidu.hugegraph.config.HugeConfig;
 import com.baidu.hugegraph.event.EventListener;
 
 public interface BackendStoreProvider {
@@ -56,4 +57,8 @@ public interface BackendStoreProvider {
     public void listen(EventListener listener);
 
     public void unlisten(EventListener listener);
+
+    default void prepareDataSource(HugeConfig config) {}
+    default void prepareConnection(HugeConfig config) {}
+    default void releaseConnection(){}
 }

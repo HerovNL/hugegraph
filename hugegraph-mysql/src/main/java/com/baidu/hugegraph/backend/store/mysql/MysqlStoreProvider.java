@@ -19,10 +19,14 @@
 
 package com.baidu.hugegraph.backend.store.mysql;
 
+import com.baidu.hugegraph.backend.BackendException;
 import com.baidu.hugegraph.backend.store.AbstractBackendStoreProvider;
 import com.baidu.hugegraph.backend.store.BackendStore;
 import com.baidu.hugegraph.backend.store.mysql.MysqlStore.MysqlGraphStore;
 import com.baidu.hugegraph.backend.store.mysql.MysqlStore.MysqlSchemaStore;
+import com.baidu.hugegraph.config.HugeConfig;
+
+import java.sql.SQLException;
 
 public class MysqlStoreProvider extends AbstractBackendStoreProvider {
 
@@ -64,5 +68,24 @@ public class MysqlStoreProvider extends AbstractBackendStoreProvider {
          * [1.9] #295: support ttl for vertex and edge
          */
         return "1.9";
+    }
+
+    @Override
+    public void prepareDataSource(HugeConfig config) {
+        MysqlDataSource.getDataSource(config);
+    }
+
+    @Override
+    public void prepareConnection(HugeConfig config){
+        try {
+            MysqlDataSource.getConnection4Thread(config);
+        }catch (SQLException e){
+            throw new BackendException("Failed to prepare connection for Txs");
+        }
+    }
+
+    @Override
+    public void releaseConnection(){
+        MysqlDataSource.releaseConnection4Thread();
     }
 }

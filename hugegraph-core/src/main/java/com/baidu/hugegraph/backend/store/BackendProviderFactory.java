@@ -74,6 +74,8 @@ public class BackendProviderFactory {
         BackendStoreProvider instance = null;
         try {
             instance = clazz.newInstance();
+            // To prepare connection pool
+            instance.prepareDataSource(config);
         } catch (Exception e) {
             throw new BackendException(e);
         }

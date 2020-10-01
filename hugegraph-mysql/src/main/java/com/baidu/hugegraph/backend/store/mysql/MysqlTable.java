@@ -55,7 +55,7 @@ import com.baidu.hugegraph.util.Log;
 import com.google.common.collect.ImmutableList;
 
 public abstract class MysqlTable
-                extends BackendTable<Session, MysqlBackendEntry.Row> {
+        extends BackendTable<Session, MysqlBackendEntry.Row> {
 
     private static final Logger LOG = Log.logger(MysqlStore.class);
 
@@ -80,7 +80,7 @@ public abstract class MysqlTable
     protected void registerMetaHandlers() {
         this.registerMetaHandler("splits", (session, meta, args) -> {
             E.checkArgument(args.length == 1,
-                            "The args count of %s must be 1", meta);
+                    "The args count of %s must be 1", meta);
             long splitSize = (long) args[0];
             return this.shardSpliter.getSplits(session, splitSize);
         });
@@ -105,10 +105,10 @@ public abstract class MysqlTable
     protected void createTable(Session session, TableDefine tableDefine) {
         StringBuilder sql = new StringBuilder();
         sql.append("CREATE TABLE IF NOT EXISTS ");
-        sql.append(this.table()).append(" (");
+        sql.append('`').append(session.database()).append("`.`").append(table()).append("` (");
         // Add columns
         for (Map.Entry<HugeKeys, String> entry :
-             tableDefine.columns().entrySet()) {
+                tableDefine.columns().entrySet()) {
             sql.append(formatKey(entry.getKey()));
             sql.append(" ");
             sql.append(entry.getValue());
@@ -133,7 +133,7 @@ public abstract class MysqlTable
             session.execute(sql.toString());
         } catch (SQLException e) {
             throw new BackendException("Failed to create table with '%s'",
-                                       e, sql);
+                    e, sql);
         }
     }
 
@@ -144,23 +144,23 @@ public abstract class MysqlTable
 
     protected void dropTable(Session session) {
         LOG.debug("Drop table: {}", this.table());
-        String sql = this.buildDropTemplate();
+        String sql = this.buildDropTemplate(session);
         try {
             session.execute(sql);
         } catch (SQLException e) {
             throw new BackendException("Failed to drop table with '%s'",
-                                       e, sql);
+                    e, sql);
         }
     }
 
     protected void truncateTable(Session session) {
         LOG.debug("Truncate table: {}", this.table());
-        String sql = this.buildTruncateTemplate();
+        String sql = this.buildTruncateTemplate(session);
         try {
             session.execute(sql);
         } catch (SQLException e) {
             throw new BackendException("Failed to truncate table with '%s'",
-                                       e, sql);
+                    e, sql);
         }
     }
 
@@ -176,31 +176,31 @@ public abstract class MysqlTable
         return ImmutableList.of(id.asObject());
     }
 
-    protected String buildInsertTemplate(MysqlBackendEntry.Row entry) {
+    protected String buildInsertTemplate(Session session, MysqlBackendEntry.Row entry) {
         if (entry.ttl() != 0L) {
-            return this.buildInsertTemplateWithTtl(entry);
+            return this.buildInsertTemplateWithTtl(session, entry);
         }
         if (this.insertTemplate != null) {
             return this.insertTemplate;
         }
 
-        this.insertTemplate = this.buildInsertTemplateForce(entry);
+        this.insertTemplate = this.buildInsertTemplateForce(session, entry);
         return this.insertTemplate;
     }
 
-    protected String buildInsertTemplateWithTtl(MysqlBackendEntry.Row entry) {
+    protected String buildInsertTemplateWithTtl(Session session, MysqlBackendEntry.Row entry) {
         assert entry.ttl() != 0L;
         if (this.insertTemplateTtl != null) {
             return this.insertTemplateTtl;
         }
 
-        this.insertTemplateTtl = this.buildInsertTemplateForce(entry);
+        this.insertTemplateTtl = this.buildInsertTemplateForce(session, entry);
         return this.insertTemplateTtl;
     }
 
-    protected String buildInsertTemplateForce(MysqlBackendEntry.Row entry) {
+    protected String buildInsertTemplateForce(Session session, MysqlBackendEntry.Row entry) {
         StringBuilder insert = new StringBuilder();
-        insert.append("REPLACE INTO ").append(this.table()).append(" (");
+        insert.append("REPLACE INTO `").append(session.database()).append("`.`").append(this.table()).append("` (");
 
         int i = 0;
         int n = entry.columns().size();
@@ -223,13 +223,13 @@ public abstract class MysqlTable
         return insert.toString();
     }
 
-    protected String buildDeleteTemplate(List<HugeKeys> idNames) {
+    protected String buildDeleteTemplate(Session session, List<HugeKeys> idNames) {
         if (this.deleteTemplate != null) {
             return this.deleteTemplate;
         }
 
         StringBuilder delete = new StringBuilder();
-        delete.append("DELETE FROM ").append(this.table());
+        delete.append("DELETE FROM `").append(session.database()).append("`.`").append(table()).append('`');
         this.appendPartition(delete);
 
         WhereBuilder where = this.newWhereBuilder();
@@ -240,12 +240,12 @@ public abstract class MysqlTable
         return this.deleteTemplate;
     }
 
-    protected String buildDropTemplate() {
-        return String.format("DROP TABLE IF EXISTS %s;", this.table());
+    protected String buildDropTemplate(Session session) {
+        return String.format("DROP TABLE IF EXISTS `%s`.`%s`;", session.database(), table());
     }
 
-    protected String buildTruncateTemplate() {
-        return String.format("TRUNCATE TABLE %s;", this.table());
+    protected String buildTruncateTemplate(Session session) {
+        return String.format("TRUNCATE TABLE `%s`.`%s`;", session.database(), table());
     }
 
     protected void appendPartition(StringBuilder sb) {
@@ -257,7 +257,7 @@ public abstract class MysqlTable
      */
     @Override
     public void insert(Session session, MysqlBackendEntry.Row entry) {
-        String template = this.buildInsertTemplate(entry);
+        String template = this.buildInsertTemplate(session, entry);
 
         PreparedStatement insertStmt;
         try {
@@ -269,7 +269,7 @@ public abstract class MysqlTable
             }
         } catch (SQLException e) {
             throw new BackendException("Failed to prepare statement '%s'" +
-                                       "for entry: %s", template, entry);
+                    "for entry: %s", template, entry);
         }
         session.add(insertStmt);
     }
@@ -290,7 +290,7 @@ public abstract class MysqlTable
     @Override
     public void delete(Session session, MysqlBackendEntry.Row entry) {
         List<HugeKeys> idNames = this.idColumnName();
-        String template = this.buildDeleteTemplate(idNames);
+        String template = this.buildDeleteTemplate(session, idNames);
         PreparedStatement deleteStmt;
         try {
             deleteStmt = session.prepareStatement(template);
@@ -313,8 +313,8 @@ public abstract class MysqlTable
             }
         } catch (SQLException e) {
             throw new BackendException("Failed to prepare statement '%s'" +
-                                       "with entry columns %s",
-                                       template, entry.columns().values());
+                    "with entry columns %s",
+                    template, entry.columns().values());
         }
         session.add(deleteStmt);
     }
@@ -353,7 +353,7 @@ public abstract class MysqlTable
 
     protected <R> Iterator<R> query(Session session, Query query,
                                     BiFunction<Query, ResultSet, Iterator<R>>
-                                    parser) {
+                                            parser) {
         ExtendableIterator<R> rs = new ExtendableIterator<>();
 
         if (query.limit() == 0L && !query.noLimit()) {
@@ -361,7 +361,7 @@ public abstract class MysqlTable
             return rs;
         }
 
-        List<StringBuilder> selections = this.query2Select(this.table(), query);
+        List<StringBuilder> selections = this.query2Select(session, table(), query);
         try {
             for (StringBuilder selection : selections) {
                 ResultSet results = session.select(selection.toString());
@@ -375,7 +375,7 @@ public abstract class MysqlTable
         return rs;
     }
 
-    protected List<StringBuilder> query2Select(String table, Query query) {
+    protected List<StringBuilder> query2Select(Session session, String table, Query query) {
         // Build query
         StringBuilder select = new StringBuilder(64);
         select.append("SELECT ");
@@ -389,7 +389,7 @@ public abstract class MysqlTable
         }
 
         // Set table
-        select.append(" FROM ").append(table);
+        select.append(" FROM `").append(session.database()).append("`.`").append(table).append('`');
 
         // Is query by id?
         List<StringBuilder> ids = this.queryId2Select(query, select);
@@ -439,14 +439,14 @@ public abstract class MysqlTable
     protected StringBuilder queryByRange(ConditionQuery query,
                                          StringBuilder select) {
         E.checkArgument(query.relations().size() == 1,
-                        "Invalid scan with multi conditions: %s", query);
+                "Invalid scan with multi conditions: %s", query);
         Condition.Relation scan = query.relations().iterator().next();
         Shard shard = (Shard) scan.value();
 
         String page = query.page();
         if (MysqlShardSpliter.START.equals(shard.start()) &&
-            MysqlShardSpliter.END.equals(shard.end()) &&
-            (page == null || page.isEmpty())) {
+                MysqlShardSpliter.END.equals(shard.end()) &&
+                (page == null || page.isEmpty())) {
             this.wrapLimit(select, query);
             return select;
         }
@@ -499,8 +499,8 @@ public abstract class MysqlTable
             List<Object> idParts = this.idColumnValue(id);
             if (nameParts.size() != idParts.size()) {
                 throw new NotFoundException(
-                          "Unsupported ID format: '%s' (should contain %s)",
-                          id, nameParts);
+                        "Unsupported ID format: '%s' (should contain %s)",
+                        id, nameParts);
             }
             ids.add(idParts);
         }
@@ -603,7 +603,7 @@ public abstract class MysqlTable
         // Set order-by
         select.append(" ORDER BY ");
         for (Map.Entry<HugeKeys, Query.Order> order :
-             query.orders().entrySet()) {
+                query.orders().entrySet()) {
             String key = formatKey(order.getKey());
             Query.Order value = order.getValue();
             select.append(key).append(" ");
@@ -625,7 +625,7 @@ public abstract class MysqlTable
         if (!page.isEmpty()) {
             byte[] position = PageState.fromString(page).position();
             Map<HugeKeys, Object> columns = PagePosition.fromBytes(position)
-                                                        .columns();
+                    .columns();
 
             List<HugeKeys> idColumnNames = this.idColumnName();
             List<Object> values = new ArrayList<>(idColumnNames.size());
@@ -701,7 +701,7 @@ public abstract class MysqlTable
 
         private static final String BASE64 =
                 "0123456789=?ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
-                "abcdefghijklmnopqrstuvwxyz";
+                        "abcdefghijklmnopqrstuvwxyz";
         private static final int COUNT = 64;
 
         public MysqlShardSpliter(String table) {
@@ -711,13 +711,13 @@ public abstract class MysqlTable
         @Override
         public List<Shard> getSplits(Session session, long splitSize) {
             E.checkArgument(splitSize >= MIN_SHARD_SIZE,
-                            "The split-size must be >= %s bytes, but got %s",
-                            MIN_SHARD_SIZE, splitSize);
+                    "The split-size must be >= %s bytes, but got %s",
+                    MIN_SHARD_SIZE, splitSize);
             List<Shard> splits = new ArrayList<>(COUNT);
             splits.add(new Shard(START, BASE64.substring(0, 1), 0));
             for (int i = 0; i < COUNT - 1; i++) {
                 splits.add(new Shard(BASE64.substring(i, i + 1),
-                                     BASE64.substring(i + 1, i + 2), 0));
+                        BASE64.substring(i + 1, i + 2), 0));
             }
             splits.add(new Shard(BASE64.substring(COUNT - 1, COUNT), END, 0));
             return splits;

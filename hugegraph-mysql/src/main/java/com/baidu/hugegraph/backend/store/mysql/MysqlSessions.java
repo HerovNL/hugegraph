@@ -42,8 +42,6 @@ public class MysqlSessions extends BackendSessionPool {
 
     private static final Logger LOG = Log.logger(MysqlStore.class);
 
-    private static final int DROP_DB_TIMEOUT = 10000;
-
     private HugeConfig config;
     private String database;
     private volatile boolean opened;
@@ -70,11 +68,12 @@ public class MysqlSessions extends BackendSessionPool {
 
     /**
      * Try connect with specified database, will not reconnect if failed
+     *
      * @throws SQLException if a database access error occurs
      */
     @Override
     public synchronized void open() throws Exception {
-        try (Connection conn = this.open(false)) {
+        try (Connection conn = getIndividualConnection()) {
             this.opened = true;
         }
     }
@@ -104,12 +103,12 @@ public class MysqlSessions extends BackendSessionPool {
         LOG.debug("Create database: {}", this.database());
 
         String sql = this.buildCreateDatabase(this.database());
-        try (Connection conn = this.openWithoutDB(0)) {
+        try (Connection conn = getIndividualConnection()) {
             conn.createStatement().execute(sql);
         } catch (SQLException e) {
             if (!e.getMessage().endsWith("already exists")) {
                 throw new BackendException("Failed to create database '%s'", e,
-                                           this.database());
+                        this.database());
             }
             // Ignore exception if database already exists
         }
@@ -119,20 +118,20 @@ public class MysqlSessions extends BackendSessionPool {
         LOG.debug("Drop database: {}", this.database());
 
         String sql = this.buildDropDatabase(this.database());
-        try (Connection conn = this.openWithoutDB(DROP_DB_TIMEOUT)) {
+        try (Connection conn = getIndividualConnection()) {
             conn.createStatement().execute(sql);
         } catch (SQLException e) {
             if (e.getCause() instanceof SocketTimeoutException) {
                 LOG.warn("Drop database '{}' timeout", this.database());
             } else {
                 throw new BackendException("Failed to drop database '%s'", e,
-                                           this.database());
+                        this.database());
             }
         }
     }
 
     public boolean existsDatabase() {
-        try (Connection conn = this.openWithoutDB(0);
+        try (Connection conn = getIndividualConnection();
              ResultSet result = conn.getMetaData().getCatalogs()) {
             while (result.next()) {
                 String dbName = result.getString(1);
@@ -148,7 +147,7 @@ public class MysqlSessions extends BackendSessionPool {
 
     public boolean existsTable(String table) {
         String sql = this.buildExistsTable(table);
-        try (Connection conn = this.openWithDB(0);
+        try (Connection conn = getIndividualConnection();
              ResultSet result = conn.createStatement().executeQuery(sql)) {
             return result.next();
         } catch (Exception e) {
@@ -163,8 +162,8 @@ public class MysqlSessions extends BackendSessionPool {
 
     protected String buildCreateDatabase(String database) {
         return String.format("CREATE DATABASE IF NOT EXISTS %s " +
-                             "DEFAULT CHARSET utf8 COLLATE utf8_bin;",
-                             database);
+                        "DEFAULT CHARSET utf8 COLLATE utf8_bin;",
+                database);
     }
 
     protected String buildDropDatabase(String database) {
@@ -173,100 +172,38 @@ public class MysqlSessions extends BackendSessionPool {
 
     protected String buildExistsTable(String table) {
         return String.format("SELECT * FROM information_schema.tables " +
-                             "WHERE table_schema = '%s' " +
-                             "AND table_name = '%s' LIMIT 1;",
-                             this.escapedDatabase(),
-                             MysqlUtil.escapeString(table));
+                        "WHERE table_schema = '%s' " +
+                        "AND table_name = '%s' LIMIT 1;",
+                this.escapedDatabase(),
+                MysqlUtil.escapeString(table));
     }
 
-    /**
-     * Connect DB without specified database
-     */
-    protected Connection openWithoutDB(int timeout) {
-        String url = this.buildUri(false, false, false, timeout);
-        try {
-            return this.connect(url);
-        } catch (SQLException e) {
-            throw new BackendException("Failed to access %s", e, url);
-        }
+    private Connection getIndividualConnection() throws SQLException {
+        return MysqlDataSource.getConnection(config);
     }
 
-    /**
-     * Connect DB with specified database, but won't auto reconnect
-     */
-    protected Connection openWithDB(int timeout) {
-        String url = this.buildUri(false, true, false, timeout);
-        try {
-            return this.connect(url);
-        } catch (SQLException e) {
-            throw new BackendException("Failed to access %s", e, url);
-        }
+    private Connection getConnection4Thread() throws SQLException {
+        return MysqlDataSource.getConnection4Thread(config);
     }
 
-    /**
-     * Connect DB with specified database
-     */
-    private Connection open(boolean autoReconnect) throws SQLException {
-        String url = this.buildUri(true, true, autoReconnect, null);
-        return this.connect(url);
+    private Connection getConnection4Thread(boolean autoCommit) throws SQLException {
+        Connection temp = getConnection4Thread();
+        if (temp.getAutoCommit() != autoCommit) {
+            temp.setAutoCommit(autoCommit);
+        }
+        return temp;
     }
 
-    protected String buildUri(boolean withConnParams, boolean withDB,
-                              boolean autoReconnect, Integer timeout) {
-        String url = this.config.get(MysqlOptions.JDBC_URL);
-        if (!url.endsWith("/")) {
-            url = String.format("%s/", url);
-        }
-        if (withDB) {
-            url = String.format("%s%s", url, this.database());
-        }
-
-        int maxTimes = this.config.get(MysqlOptions.JDBC_RECONNECT_MAX_TIMES);
-        int interval = this.config.get(MysqlOptions.JDBC_RECONNECT_INTERVAL);
-        String sslMode = this.config.get(MysqlOptions.JDBC_SSL_MODE);
-
-        URIBuilder builder = this.newConnectionURIBuilder();
-        builder.setPath(url).setParameter("useSSL", sslMode);
-        if (withConnParams) {
-            builder.setParameter("characterEncoding", "utf-8")
-                   .setParameter("rewriteBatchedStatements", "true")
-                   .setParameter("useServerPrepStmts", "false")
-                   .setParameter("autoReconnect", String.valueOf(autoReconnect))
-                   .setParameter("maxReconnects", String.valueOf(maxTimes))
-                   .setParameter("initialTimeout", String.valueOf(interval));
-        }
-        if (timeout != null) {
-            builder.setParameter("socketTimeout", String.valueOf(timeout));
-        }
-        return builder.toString();
+    private void releaseConnection4Thread() {
+        MysqlDataSource.releaseConnection4Thread();
     }
 
-    protected URIBuilder newConnectionURIBuilder() {
-        return new URIBuilder();
-    }
-
-    private Connection connect(String url) throws SQLException {
-        String driverName = this.config.get(MysqlOptions.JDBC_DRIVER);
-        String username = this.config.get(MysqlOptions.JDBC_USERNAME);
-        String password = this.config.get(MysqlOptions.JDBC_PASSWORD);
-        try {
-            // Register JDBC driver
-            Class.forName(driverName);
-        } catch (ClassNotFoundException e) {
-            throw new BackendException("Invalid driver class '%s'",
-                                       driverName);
-        }
-        return DriverManager.getConnection(url, username, password);
-    }
 
     public class Session extends AbstractBackendSession {
-
-        private Connection conn;
         private Map<String, PreparedStatement> statements;
         private int count;
 
         public Session() {
-            this.conn = null;
             this.statements = new HashMap<>();
             this.count = 0;
         }
@@ -275,100 +212,55 @@ public class MysqlSessions extends BackendSessionPool {
             return MysqlSessions.this.config();
         }
 
+        public String database(){
+            return MysqlSessions.this.database;
+        }
+
         @Override
         public void open() {
             try {
-                this.doOpen();
+                getConnection4Thread();
+                opened = true;
             } catch (SQLException e) {
+                opened = false;
                 throw new BackendException("Failed to open connection", e);
             }
         }
 
-        private void tryOpen() {
-            try {
-                this.doOpen();
-            } catch (SQLException ignored) {
-                // Ignore
-            }
-        }
-
-        private void doOpen() throws SQLException {
-            if (this.conn != null && !this.conn.isClosed()) {
-                return;
-            }
-            this.conn = MysqlSessions.this.open(true);
-            this.opened = true;
-        }
-
         @Override
         public void close() {
-            assert this.closeable();
-            if (this.conn == null) {
-                return;
-            }
-
-            this.opened = false;
-            this.doClose();
+            clearStatements();
+            releaseConnection4Thread();
         }
 
-        private void doClose() {
-            SQLException exception = null;
+        private boolean clearStatements(){
+            boolean success = true;
             for (PreparedStatement statement : this.statements.values()) {
                 try {
                     statement.close();
                 } catch (SQLException e) {
-                    exception = e;
+                    success = false;
+                    LOG.error("Failed to close statements",e);
                 }
             }
             this.statements.clear();
-
-            try {
-                this.conn.close();
-            } catch (SQLException e) {
-                exception = e;
-            } finally {
-                this.conn = null;
-            }
-
-            if (exception != null) {
-                throw new BackendException("Failed to close connection",
-                                           exception);
-            }
+            return success;
         }
+
 
         @Override
         public boolean opened() {
-            if (this.opened && this.conn == null) {
-                // Reconnect if the connection is reset
-                tryOpen();
-            }
-            return this.opened && this.conn != null;
+            return this.opened;
         }
 
         @Override
         public boolean closed() {
-            if (!this.opened || this.conn == null) {
-                return true;
-            }
-            try {
-                return this.conn.isClosed();
-            } catch (SQLException ignored) {
-                // Assume closed here
-                return true;
-            }
+            return !this.opened;
         }
 
         public void clear() {
             this.count = 0;
-            SQLException exception = null;
-            for (PreparedStatement statement : this.statements.values()) {
-                try {
-                    statement.clearBatch();
-                } catch (SQLException e) {
-                    exception = e;
-                }
-            }
-            if (exception != null) {
+            if (!clearStatements()) {
                 /*
                  * Will throw exception when the database connection error,
                  * we clear statements because clearBatch() failed
@@ -378,16 +270,12 @@ public class MysqlSessions extends BackendSessionPool {
         }
 
         public void begin() throws SQLException {
-            this.conn.setAutoCommit(false);
-        }
-
-        public void end() throws SQLException {
-            this.conn.setAutoCommit(true);
+            getConnection4Thread(false);
         }
 
         public void endAndLog() {
             try {
-                this.conn.setAutoCommit(true);
+                getConnection4Thread(true);
             } catch (SQLException e) {
                 LOG.warn("Failed to set connection to auto-commit status", e);
             }
@@ -400,7 +288,7 @@ public class MysqlSessions extends BackendSessionPool {
                 for (PreparedStatement statement : this.statements.values()) {
                     updated += IntStream.of(statement.executeBatch()).sum();
                 }
-                this.conn.commit();
+                getConnection4Thread().commit();
                 this.clear();
             } catch (SQLException e) {
                 throw new BackendException("Failed to commit", e);
@@ -421,7 +309,7 @@ public class MysqlSessions extends BackendSessionPool {
         public void rollback() {
             this.clear();
             try {
-                this.conn.rollback();
+                getConnection4Thread().rollback();
             } catch (SQLException e) {
                 throw new BackendException("Failed to rollback", e);
             } finally {
@@ -436,48 +324,19 @@ public class MysqlSessions extends BackendSessionPool {
 
         @Override
         public void reconnectIfNeeded() {
-            if (!this.opened) {
-                return;
-            }
-
-            if (this.conn == null) {
-                tryOpen();
-            }
-
-            try {
-                this.execute("SELECT 1;");
-            } catch (SQLException ignored) {
-                // pass
-            }
         }
 
         @Override
         public void reset() {
-            // NOTE: this method may be called by other threads
-            if (this.conn == null) {
-                return;
-            }
-            try {
-                this.doClose();
-            } catch (Exception e) {
-                LOG.warn("Failed to reset connection", e);
-            }
+            clearStatements();
         }
 
         public ResultSet select(String sql) throws SQLException {
-            assert this.conn.getAutoCommit();
-            return this.conn.createStatement().executeQuery(sql);
+            return getConnection4Thread().createStatement().executeQuery(sql);
         }
 
         public boolean execute(String sql) throws SQLException {
-            /*
-             * commit() or rollback() failed to set connection to auto-commit
-             * status in prior transaction. Manually set to auto-commit here.
-             */
-            if (!this.conn.getAutoCommit()) {
-                this.end();
-            }
-            return this.conn.createStatement().execute(sql);
+            return getConnection4Thread(true).createStatement().execute(sql);
         }
 
         public void add(PreparedStatement statement) {
@@ -487,15 +346,15 @@ public class MysqlSessions extends BackendSessionPool {
                 this.count++;
             } catch (SQLException e) {
                 throw new BackendException("Failed to add statement '%s' " +
-                                           "to batch", e, statement);
+                        "to batch", e, statement);
             }
         }
 
         public PreparedStatement prepareStatement(String sqlTemplate)
-                                                  throws SQLException {
+                throws SQLException {
             PreparedStatement statement = this.statements.get(sqlTemplate);
             if (statement == null) {
-                statement = this.conn.prepareStatement(sqlTemplate);
+                statement = getConnection4Thread().prepareStatement(sqlTemplate);
                 this.statements.putIfAbsent(sqlTemplate, statement);
             }
             return statement;
